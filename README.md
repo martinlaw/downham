@@ -163,10 +163,11 @@ If you'd like a higher or lower cap than 12, search `app.R` for
 ## About the calendar view
 
 The calendar is drawn using [FullCalendar](https://fullcalendar.io/),
-a free JavaScript library loaded from a CDN. Recurring events
-currently show up as a single tagged entry on their listed date
-rather than repeating automatically — see "Suggested next steps"
-below if you want that to change.
+a free JavaScript library loaded from a CDN. Recurring events using
+one of the structured patterns (Weekly / Fortnightly / Monthly / etc.)
+appear as individual occurrences, same as in the table. Only the
+free-text "Other / describe it" option still shows as a single entry,
+since there's no pattern for the app to expand automatically there.
 
 ## About the Start Time / End Time fields
 
@@ -198,10 +199,30 @@ automatically. The link text itself is still safely escaped so it
 can't break out of the page and inject anything else, whatever it
 points to.
 
-## Suggested next steps (once this version feels solid)
+## Email notifications when someone submits an event
 
-- Turning `recurrence_rule` from free text into a structured rule
-  (e.g. day of week + start/end date) so recurring events can
-  auto-expand into repeated calendar entries instead of showing once.
-- Email notification to you when a new event is submitted, so you
-  don't have to keep checking the Admin tab.
+By default the app doesn't send email - you only see new submissions
+by checking the Admin tab. To get an email whenever someone submits
+an event, set these as environment variables (in Posit Connect Cloud:
+your content's settings page, or the "Advanced" step at publish time):
+
+| Variable | What it's for |
+|---|---|
+| `NOTIFY_EMAIL` | Where to send the notification (your address) |
+| `SMTP_USER` | The *sending* email address |
+| `SMTP_PASSWORD` | An app password for that address (see note below) |
+| `SMTP_PROVIDER` | `gmail`, `outlook`, or `office365` for the common cases |
+| `SMTP_HOST` / `SMTP_PORT` | Only needed if you leave `SMTP_PROVIDER` blank (any other provider) |
+
+**Gmail/Outlook/Office365 will reject your normal account password**
+for this - you need to create an "app password" specifically for
+sending, which requires two-factor authentication to be turned on
+for that account first (Gmail: Google Account → Security → 2-Step
+Verification → App passwords).
+
+Leaving `NOTIFY_EMAIL` or `SMTP_USER` blank simply switches this off
+- nothing else about the app depends on it being configured, and a
+problem with your email setup (e.g. a wrong password) can never stop
+someone's event submission from going through; it just skips sending
+silently. This needs the `blastula` package (added to the
+`install.packages()` line above).

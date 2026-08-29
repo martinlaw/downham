@@ -5,7 +5,7 @@
 
 # ---- Packages ----
 # If any of these aren't installed yet, run (once):
-# install.packages(c("shiny", "DT", "DBI", "RSQLite", "dplyr", "lubridate", "bslib"))
+# install.packages(c("shiny", "DT", "DBI", "RSQLite", "dplyr", "lubridate", "bslib", "blastula"))
 library(shiny)
 library(DT)
 library(DBI)
@@ -13,6 +13,7 @@ library(RSQLite)
 library(dplyr)
 library(lubridate)
 library(bslib)
+library(blastula)
 
 # ---- Database setup ----
 # Using SQLite so submissions persist between app restarts.
@@ -77,6 +78,69 @@ VILLAGE_NAME <- "Downham Market"
 COLOR_PRIMARY <- "#3f6d4e"    # one-off events, buttons, links
 COLOR_ACCENT <- "#caa156"     # recurring events
 COLOR_ACCENT_TINT <- "#f5ead2"  # pale version of the accent, for row/date highlighting
+
+# ---- Email notifications (optional) ----
+# Set these as environment variables (in Posit Connect Cloud: the
+# content's settings page, or the "Advanced" step at publish time) to
+# get an email whenever someone submits a new event. If NOTIFY_EMAIL
+# or SMTP_USER is left blank, the app just skips sending - nothing
+# else about the app depends on this being configured.
+#
+#   NOTIFY_EMAIL   - where to send notifications (your address)
+#   SMTP_USER      - the *sending* email address
+#   SMTP_PASSWORD  - an app password for that address (see note below)
+#   SMTP_PROVIDER  - "gmail", "outlook", or "office365" for the common
+#                    cases; leave blank and set SMTP_HOST/SMTP_PORT
+#                    instead for any other provider
+#   SMTP_HOST      - only needed if SMTP_PROVIDER is blank
+#   SMTP_PORT      - only needed if SMTP_PROVIDER is blank
+#
+# Note: Gmail/Outlook/Office365 will reject your normal account
+# password for this - you need to create an "app password" for the
+# sending account (with two-factor authentication turned on first).
+NOTIFY_EMAIL <- Sys.getenv("NOTIFY_EMAIL")
+SMTP_USER <- Sys.getenv("SMTP_USER")
+SMTP_PROVIDER <- Sys.getenv("SMTP_PROVIDER", "gmail")
+SMTP_HOST <- Sys.getenv("SMTP_HOST")
+SMTP_PORT <- Sys.getenv("SMTP_PORT")
+
+# Emails NOTIFY_EMAIL whenever a new event is submitted, if email has
+# been configured (see above). Wrapped in tryCatch so that a problem
+# sending the email (e.g. wrong password) can never stop the actual
+# submission from succeeding - the person submitting the event should
+# never see an error caused by your email setup.
+notify_new_submission <- function(title, first_date, occurrences = 1) {
+  if (!nzchar(NOTIFY_EMAIL) || !nzchar(SMTP_USER)) return(invisible(NULL))
+
+  tryCatch({
+    creds <- if (nzchar(SMTP_PROVIDER)) {
+      creds_envvar(user = SMTP_USER, pass_envvar = "SMTP_PASSWORD", provider = SMTP_PROVIDER)
+    } else {
+      creds_envvar(user = SMTP_USER, pass_envvar = "SMTP_PASSWORD",
+                   host = SMTP_HOST, port = as.integer(SMTP_PORT), use_ssl = TRUE)
+    }
+
+    when_text <- if (occurrences > 1) {
+      paste0(occurrences, " occurrences, starting ", format(as.Date(first_date), "%d %b %Y"))
+    } else {
+      format(as.Date(first_date), "%d %b %Y")
+    }
+
+    email <- compose_email(
+      body = md(paste0(
+        "A new event was submitted on **", SITE_TITLE, "**:\n\n",
+        "**", title, "** - ", when_text, "\n\n",
+        "Open the Admin tab on the site to review and approve it."
+      ))
+    )
+
+    smtp_send(email, to = NOTIFY_EMAIL, from = SMTP_USER,
+              subject = paste0("New event submitted: ", title),
+              credentials = creds)
+  }, error = function(e) {
+    message("Could not send notification email: ", conditionMessage(e))
+  })
+}
 
 # ---- Helper functions ----
 
@@ -336,8 +400,8 @@ ui <- fluidPage(
     tabPanel(
       "What's On",
       br(),
-      p(paste0("A guide to upcoming events in Downham Market. See what events are on, and add your own. No adverts, no spam.")),
-      checkboxInput("show_recurring", "Include recurring events/classes.", value = FALSE),
+      p(paste0("A guide to upcoming events in Downham Market. See what events are on, and add your own. Submitted events are checked to avoid spam.")),
+      checkboxInput("show_recurring", "Include recurring events/classes (highlighted).", value = FALSE),
       DTOutput("public_events_table"),
       hr(),
       h4("Calendar view"),
@@ -612,6 +676,7 @@ server <- function(input, output, session) {
       for (d in occurrence_dates) {
         insert_one(as.Date(d, origin = "1970-01-01"), series_id, rule_label)
       }
+      notify_new_submission(input$sub_title, input$sub_date, length(occurrence_dates))
     } else {
       # A one-off event, or a recurring pattern too irregular to describe
       # with the dropdown - stored as a single row, shown once.
@@ -621,6 +686,7 @@ server <- function(input, output, session) {
         NA
       }
       insert_one(input$sub_date, NA, rule_label)
+      notify_new_submission(input$sub_title, input$sub_date)
     }
 
     dbDisconnect(con)
