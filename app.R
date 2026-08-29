@@ -336,8 +336,8 @@ ui <- fluidPage(
     tabPanel(
       "What's On",
       br(),
-      p(paste0("Upcoming events in ", VILLAGE_NAME, ". Recurring events are highlighted.")),
-      checkboxInput("show_recurring", "Show recurring events/classes", value = FALSE),
+      p(paste0("A guide to upcoming events in Downham Market. See what events are on, and add your own. No adverts, no spam.")),
+      checkboxInput("show_recurring", "Include recurring events/classes.", value = FALSE),
       DTOutput("public_events_table"),
       hr(),
       h4("Calendar view"),
@@ -461,13 +461,13 @@ server <- function(input, output, session) {
     events <- events %>%
       mutate(
         event_date = as.Date(event_date),
-        `Recurring?` = ifelse(is_recurring == 1, "Yes", "No"),
+        `Recurring?` = ifelse(is_recurring == 1, recurrence_rule, "No"),
         When = format_when_vec(event_date, start_time, end_time),
         Link = make_link_cell(url)
       ) %>%
       arrange(event_date, desc(is.na(start_time)), start_time) %>%
-      select(Event = title, When, Details = recurrence_rule,
-             Location = location, Description = description, Link, `Recurring?`)
+      select(Event = title, When, Location = location, Description = description,
+             Link, `Recurring?`, is_recurring)
 
     datatable(
       events,
@@ -480,13 +480,18 @@ server <- function(input, output, session) {
         # the displayed "When" text wouldn't sort correctly (e.g. "1st"
         # before "10th"), so no column-based sort is applied here.
         order = list(),
-        columnDefs = list(list(orderable = FALSE, targets = 1))
+        columnDefs = list(
+          list(orderable = FALSE, targets = 1),
+          # is_recurring is only kept to drive the row highlighting below,
+          # not for display, since "Recurring?" now shows text that varies.
+          list(visible = FALSE, targets = which(names(events) == "is_recurring") - 1)
+        )
       )
     ) %>%
       formatStyle(
-        "Recurring?",
+        "is_recurring",
         target = "row",
-        backgroundColor = styleEqual("Yes", COLOR_ACCENT_TINT)
+        backgroundColor = styleEqual(1, COLOR_ACCENT_TINT)
       )
   })
 
@@ -698,11 +703,10 @@ server <- function(input, output, session) {
         `First date` = format(first_date, "%d %b %Y"),
         Time = format_time_range_vec(start_time, end_time),
         Link = make_link_cell(url),
-        `Recurring?` = ifelse(is_recurring == 1, "Yes", "No")
+        `Recurring?` = ifelse(is_recurring == 1, recurrence_rule, "No")
       ) %>%
       select(Title = title, `First date`, Occurrences = occurrences, Time,
-             Location = location, Link, `Recurring?`, Details = recurrence_rule,
-             Description = description)
+             Location = location, Link, `Recurring?`, Description = description)
 
     datatable(events, rownames = FALSE, selection = "multiple",
               style = "bootstrap5",

@@ -78,6 +78,33 @@ casual snooping.
 The free tier has a monthly usage limit (active hours), which is
 normally plenty for a town-sized audience.
 
+## A custom domain (e.g. on Posit Connect Cloud)
+
+If you're hosting on [Posit Connect Cloud](https://connect.posit.cloud)
+rather than shinyapps.io, custom domains are supported, but only on
+the paid **Enhanced** tier and above (not the free tier). Roughly:
+
+1. Buy a domain if you don't already have one (via any registrar -
+   e.g. Namecheap, GoDaddy, IONOS).
+2. In Connect Cloud, go to **Admin → Domains → + Add Domain** and
+   enter it.
+3. Connect Cloud gives you DNS records (typically a CNAME) to add at
+   your domain registrar. This is usually done from your registrar's
+   "DNS settings" page, not from Connect Cloud itself.
+4. Back in Connect Cloud, click **Verify** - this can take anywhere
+   from a few minutes up to 72 hours while the DNS change spreads
+   across the internet.
+5. Once verified, assign the domain to this app from its content
+   settings.
+
+SSL/HTTPS (the padlock icon) is handled automatically once the domain
+is verified - nothing extra to configure there.
+
+If you'd rather not pay for a custom domain yet, Connect Cloud also
+lets you customise the free `connect.posit.cloud/...` URL slug itself,
+which is a free way to make the address a bit more presentable in the
+meantime.
+
 ## Personalising the site
 
 Near the top of `app.R` there's a branding section:
