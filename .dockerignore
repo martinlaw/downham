@@ -1,0 +1,6 @@
+# Don't bake a local test database or R session files into the image
+events.db
+*.Rhistory
+.Rproj.user/
+.Rdata
+README.md

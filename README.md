@@ -105,6 +105,81 @@ lets you customise the free `connect.posit.cloud/...` URL slug itself,
 which is a free way to make the address a bit more presentable in the
 meantime.
 
+## A cheaper custom domain: self-hosting on Render.com
+
+Posit Connect Cloud's custom domains start at $59/month. A much
+cheaper route is [Render](https://render.com): roughly **$7.25/month**
+for always-on hosting with a persistent database, plus **$10-15/year**
+for a domain name from any registrar - custom domains and SSL are
+included on Render at no extra cost.
+
+The trade-off: Render runs Docker containers rather than R scripts
+directly, so the app needs to be packaged up first. That's what the
+`Dockerfile` and `.dockerignore` alongside `app.R` are for - you
+shouldn't need to edit either of them.
+
+### 1. Put the app in a GitHub repository
+
+Render deploys from a Git repo. If you don't already have the app on
+GitHub:
+
+1. Create a free [GitHub](https://github.com) account if you don't
+   have one.
+2. Create a new repository and upload `app.R`, `Dockerfile`, and
+   `.dockerignore` to it (GitHub's web upload works fine for this -
+   you don't need the command line).
+
+### 2. Create the Render web service
+
+1. Create a free account at [render.com](https://render.com).
+2. Click **New → Web Service** and connect the GitHub repo.
+3. Render should detect the `Dockerfile` automatically. If asked,
+   choose **Docker** as the environment/runtime.
+4. Choose the **Starter** instance type (not Free) - the free tier
+   can't attach the persistent disk this app needs to keep its
+   database between restarts (see step 3).
+5. Click **Create Web Service**. The first build takes 10-20 minutes,
+   since it compiles the R packages from scratch; later builds that
+   only change `app.R` are much faster.
+
+### 3. Add a persistent disk (so events aren't lost on restart)
+
+Without this step, the database resets every time the app restarts,
+which would silently delete submitted/approved events.
+
+1. On the service's page, go to the **Disks** tab and add a disk -
+   1 GB is far more than this app needs, and costs about $0.25/month.
+2. Give it a mount path, e.g. `/var/data`.
+3. Go to **Environment** and add a variable: `DB_PATH` =
+   `/var/data/events.db` (matching the mount path you chose).
+
+### 4. Set your other environment variables
+
+Under the **Environment** tab, add the same secret variables you were
+using on Connect Cloud - `SHINY_APP_PASSWORD`, and, if you've set up
+email notifications, `NOTIFY_EMAIL`, `SMTP_USER`, `SMTP_PASSWORD`,
+`SMTP_PROVIDER` (or `SMTP_HOST`/`SMTP_PORT`). Nothing about these
+changes moving from Connect Cloud to Render.
+
+### 5. Add your custom domain
+
+1. Buy a domain from any registrar if you don't have one - Cloudflare
+   Registrar sells them at cost with no renewal markup, which is
+   worth knowing since some registrars raise the price after year one.
+2. On the Render service's **Settings** tab, find **Custom Domains**
+   and add your domain.
+3. Render gives you a DNS record to add at your registrar (usually a
+   CNAME, or an A record for an apex/root domain like `mydomain.com`
+   without `www.`).
+4. Wait for DNS to propagate (minutes to a couple of hours, usually)
+   and for Render to confirm the domain is verified. SSL is issued
+   automatically once it is.
+
+Render's exact pricing, plan names, and dashboard layout are the kind
+of thing that shifts over time, so it's worth checking
+[render.com/pricing](https://render.com/pricing) and Render's own
+docs before committing, rather than relying solely on this guide.
+
 ## Personalising the site
 
 Near the top of `app.R` there's a branding section:

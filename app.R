@@ -17,10 +17,15 @@ library(blastula)
 
 # ---- Database setup ----
 # Using SQLite so submissions persist between app restarts.
-# The database file (events.db) is created automatically in the
-# same folder as this app the first time it runs.
-
-db_path <- "events.db"
+# The database file is created automatically the first time it runs.
+#
+# DB_PATH lets you point this at a persistent disk on platforms whose
+# container filesystem doesn't survive restarts (e.g. Render) - set
+# DB_PATH to somewhere on that disk (e.g. "/var/data/events.db") as an
+# environment variable. Left unset, it just uses "events.db" in the
+# app's own folder, exactly as before.
+db_path <- Sys.getenv("DB_PATH", "events.db")
+dir.create(dirname(db_path), recursive = TRUE, showWarnings = FALSE)
 
 init_db <- function() {
   con <- dbConnect(RSQLite::SQLite(), db_path)
@@ -400,7 +405,7 @@ ui <- fluidPage(
     tabPanel(
       "What's On",
       br(),
-      p(paste0("A guide to upcoming events in Downham Market. See what events are on, and add your own. Submitted events are checked to avoid spam.")),
+      p(paste0("A guide to upcoming events in Downham Market. See what events are on, and add your own. No adverts, no spam.")),
       checkboxInput("show_recurring", "Include recurring events/classes (highlighted).", value = FALSE),
       DTOutput("public_events_table"),
       hr(),
