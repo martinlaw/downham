@@ -10,8 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     libcurl4-openssl-dev \
     libxml2-dev \
+    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
-
+    
 # R packages the app needs. This step is the slow part of the build
 # (10-20 minutes is normal, since it compiles from source) - it only
 # reruns when this line changes, so later builds that only touch
