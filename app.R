@@ -6,8 +6,16 @@
 # ---- Packages ----
 # If any of these aren't installed yet, run (once):
 # install.packages(c("shiny", "DT", "DBI", "RSQLite", "dplyr", "lubridate", "bslib", "blastula"))
-install.packages("librarian")
-librarian::shelf(c("shiny", "DT", "DBI", "RSQLite", "dplyr", "lubridate", "bslib", "blastula"))
+#install.packages("librarian")
+#librarian::shelf(c("shiny", "DT", "DBI", "RSQLite", "dplyr", "lubridate", "bslib", "blastula"))
+library(shiny)
+library(DT)
+library(DBI)
+library(RSQLite)
+library(dplyr)
+library(lubridate)
+library(bslib)
+library(blastula)
 
 # ---- Database setup ----
 # Using SQLite so submissions persist between app restarts.
