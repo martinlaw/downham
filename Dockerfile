@@ -17,8 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (10-20 minutes is normal, since it compiles from source) - it only
 # reruns when this line changes, so later builds that only touch
 # app.R are much faster.
-RUN R -e "install.packages(c('shiny', 'DT', 'DBI', 'RSQLite', 'dplyr', 'lubridate', 'bslib', 'blastula'), repos = 'https://cloud.r-project.org')"
-
+RUN R -e "install.packages(c('shiny', 'DT', 'DBI', 'RSQLite', 'dplyr', 'lubridate', 'bslib', 'blastula'), repos = 'https://cloud.r-project.org'); \
+    pkgs <- c('shiny', 'DT', 'DBI', 'RSQLite', 'dplyr', 'lubridate', 'bslib', 'blastula'); \
+    missing <- pkgs[!pkgs %in% rownames(installed.packages())]; \
+    if (length(missing) > 0) stop('Failed to install: ', paste(missing, collapse=', '))"
 WORKDIR /app
 COPY app.R /app/app.R
 
