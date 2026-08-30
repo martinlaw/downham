@@ -11,7 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4-openssl-dev \
     libxml2-dev \
     zlib1g-dev \
+    libuv1-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# libuv1-dev required by fs -> sass -> bslib chain
     
 # R packages the app needs. This step is the slow part of the build
 # (10-20 minutes is normal, since it compiles from source) - it only
