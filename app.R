@@ -107,7 +107,7 @@ COLOR_ACCENT_TINT <- "#f5ead2"  # pale version of the accent, for row/date highl
 # sending account (with two-factor authentication turned on first).
 NOTIFY_EMAIL <- Sys.getenv("NOTIFY_EMAIL")
 SMTP_USER <- Sys.getenv("SMTP_USER")
-SMTP_PROVIDER <- Sys.getenv("SMTP_PROVIDER", "gmail")
+SMTP_PROVIDER <- Sys.getenv("SMTP_PROVIDER", "")
 SMTP_HOST <- Sys.getenv("SMTP_HOST")
 SMTP_PORT <- Sys.getenv("SMTP_PORT")
 
@@ -119,12 +119,15 @@ SMTP_PORT <- Sys.getenv("SMTP_PORT")
 notify_new_submission <- function(title, first_date, occurrences = 1) {
   if (!nzchar(NOTIFY_EMAIL) || !nzchar(SMTP_USER)) return(invisible(NULL))
 
+  
   tryCatch({
-    creds <- if (nzchar(SMTP_PROVIDER)) {
-      creds_envvar(user = SMTP_USER, pass_envvar = "SMTP_PASSWORD", provider = SMTP_PROVIDER)
-    } else {
+    creds <- if (nzchar(SMTP_HOST)) {
       creds_envvar(user = SMTP_USER, pass_envvar = "SMTP_PASSWORD",
                    host = SMTP_HOST, port = as.integer(SMTP_PORT), use_ssl = TRUE)
+    } else if (nzchar(SMTP_PROVIDER)) {
+      creds_envvar(user = SMTP_USER, pass_envvar = "SMTP_PASSWORD", provider = SMTP_PROVIDER)
+    } else {
+      stop("Email is configured but neither SMTP_HOST nor SMTP_PROVIDER is set")
     }
 
     when_text <- if (occurrences > 1) {
