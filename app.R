@@ -412,6 +412,16 @@ ui <- fluidPage(
       br(),
       p(paste0("A guide to upcoming events in Downham Market. Check out upcoming events, and add your own by clicking the 'Submit' tab. Enjoy!")),
       checkboxInput("show_recurring", "Include recurring events/classes (highlighted).", value = FALSE),
+      
+      h4("Coming up in the next 7 days"),
+      uiOutput("this_week_strip"),
+      
+      h4("Further ahead"),
+      DTOutput("public_events_table"),
+      
+      hr(),
+      h4("Calendar view"),
+
       DTOutput("public_events_table"),
       hr(),
       h4("Calendar view"),
@@ -527,10 +537,64 @@ server <- function(input, output, session) {
     dbReadTable(con, "events")
   })
 
-  # ---- Public "What's On" table ----
-  output$public_events_table <- renderDT({
+  # The single source of truth for "what's coming up" - approved, upcoming,
+  # with the recurring-events checkbox applied, sorted chronologically.
+  # Both the 7-day strip and the "Further ahead" table read from this, so
+  # there's only one place that defines what counts as "upcoming".
+  upcoming_events <- reactive({
     events <- all_events() %>%
       filter(status == "approved", as.Date(event_date) >= Sys.Date())
+    
+    if (!isTRUE(input$show_recurring)) {
+      events <- events %>% filter(is_recurring == 0)
+    }
+    
+    events %>%
+      mutate(event_date = as.Date(event_date)) %>%
+      arrange(event_date, desc(is.na(start_time)), start_time)
+  })
+  
+  this_week_events <- reactive({
+    upcoming_events() %>% filter(event_date <= Sys.Date() + 7)
+  })
+  
+  further_ahead_events <- reactive({
+    upcoming_events() %>% filter(event_date > Sys.Date() + 7)
+  })
+  
+  output$this_week_strip <- renderUI({
+    ev <- this_week_events()
+    
+    if (nrow(ev) == 0) {
+      return(tags$p(style = "color: #666; font-style: italic;",
+                    "Nothing in the next seven days - see what's further ahead below."))
+    }
+    
+    items <- lapply(seq_len(nrow(ev)), function(i) {
+      row <- ev[i, ]
+      accent <- if (isTRUE(row$is_recurring == 1)) COLOR_ACCENT else COLOR_PRIMARY
+      when_label <- format_time_range_vec(row$start_time, row$end_time)
+      
+      div(style = paste0("flex: 0 0 190px; border-left: 4px solid ", accent, "; padding: 8px 14px;"),
+          div(style = "display: flex; align-items: baseline; gap: 6px;",
+              tags$span(style = "font-family: 'Fraunces', serif; font-size: 24px; font-weight: 600;",
+                        format(row$event_date, "%d")),
+              tags$span(style = "font-size: 13px; color: #666;",
+                        format(row$event_date, "%a %b"))
+          ),
+          tags$strong(row$title),
+          if (nzchar(when_label)) tags$div(style = "font-size: 13px; color: #555;", when_label),
+          if (!is.na(row$location) && nzchar(row$location))
+            tags$div(style = "font-size: 13px; color: #555;", row$location)
+      )
+    })
+    
+    div(style = "display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px;", items)
+  })
+  
+  # ---- Public "What's On" table ----
+  output$public_events_table <- renderDT({
+    events <- further_ahead_events()   # <-- was: all_events() %>% filter(...)
 
     if (!isTRUE(input$show_recurring)) {
       events <- events %>% filter(is_recurring == 0)
@@ -554,6 +618,7 @@ server <- function(input, output, session) {
       escape = -which(names(events) == "Link"),
       options = list(
         pageLength = 15,
+        language = list(zeroRecords = "Nothing further ahead yet - check back as more events get added!"),
         # The rows are already sorted chronologically above; sorting by
         # the displayed "When" text wouldn't sort correctly (e.g. "1st"
         # before "10th"), so no column-based sort is applied here.
@@ -803,7 +868,8 @@ server <- function(input, output, session) {
     datatable(events, rownames = FALSE, selection = "multiple",
               style = "bootstrap5",
               escape = -which(names(events) == "Link"),
-              options = list(pageLength = 10))
+              options = list(pageLength = 10),
+              scrollX = TRUE)
   })
   
   all_grouped <- reactive({
