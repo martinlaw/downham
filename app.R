@@ -410,7 +410,7 @@ ui <- fluidPage(
     tabPanel(
       "What's On",
       br(),
-      p(paste0("A guide to upcoming events in Downham Market. See what events are on, and add your own. No adverts, no spam.")),
+      p(paste0("A guide to upcoming events in Downham Market. Check out upcoming events, and add your own by clicking the 'Submit' tab. Enjoy!")),
       checkboxInput("show_recurring", "Include recurring events/classes (highlighted).", value = FALSE),
       DTOutput("public_events_table"),
       hr(),
@@ -445,6 +445,10 @@ ui <- fluidPage(
           Shiny.addCustomMessageHandler('updateCalendarEvents', function(events) {
             calendar.removeAllEvents();
             events.forEach(function(e) { calendar.addEvent(e); });
+            calendar.updateSize();   // <-- recalculate after the layout has settled
+          });
+          window.addEventListener('load', function() {
+          calendar.updateSize();  // <-- catch any layout shift from late-loading fonts
           });
         });
       "))
@@ -526,7 +530,7 @@ server <- function(input, output, session) {
   # ---- Public "What's On" table ----
   output$public_events_table <- renderDT({
     events <- all_events() %>%
-      filter(status == "approved")
+      filter(status == "approved", as.Date(event_date) >= Sys.Date())
 
     if (!isTRUE(input$show_recurring)) {
       events <- events %>% filter(is_recurring == 0)
@@ -732,11 +736,23 @@ server <- function(input, output, session) {
       )
     } else {
       tagList(
-        h4("Pending events"),
-        p("Select the rows you want to act on, then click a button below. A recurring event's occurrences are grouped into one row, so approving or rejecting it applies to the whole series."),
-        DTOutput("pending_events_table"),
-        actionButton("approve_btn", "Approve selected", class = "btn-success"),
-        actionButton("reject_btn", "Reject selected", class = "btn-danger")
+        tabsetPanel(
+          tabPanel(
+            "Pending",
+            br(),
+            p("Select the rows you want to act on, then click a button below. A recurring event's occurrences are grouped into one row, so approving or rejecting it applies to the whole series."),
+            DTOutput("pending_events_table"),
+            actionButton("approve_btn", "Approve selected", class = "btn-success"),
+            actionButton("reject_btn", "Reject selected", class = "btn-danger")
+          ),
+          tabPanel(
+            "All events",
+            br(),
+            p("Every event regardless of status - use this to remove test events or ones with mistakes. Deleting a recurring event removes the whole series."),
+            DTOutput("all_events_table"),
+            actionButton("delete_btn", "Delete selected", class = "btn-danger")
+          )
+        )
       )
     }
   })
@@ -788,6 +804,48 @@ server <- function(input, output, session) {
               style = "bootstrap5",
               escape = -which(names(events) == "Link"),
               options = list(pageLength = 10))
+  })
+  
+  all_grouped <- reactive({
+    all_events() %>%
+      add_group_key() %>%
+      group_by(group_key) %>%
+      summarise(
+        title = first(title),
+        first_date = min(as.Date(event_date)),
+        occurrences = n(),
+        status = first(status),
+        is_recurring = first(is_recurring),
+        recurrence_rule = first(recurrence_rule),
+        .groups = "drop"
+      ) %>%
+      arrange(desc(first_date))
+  })
+  
+  output$all_events_table <- renderDT({
+    events <- all_grouped() %>%
+      mutate(
+        `First date` = format(first_date, "%d %b %Y"),
+        `Recurring?` = ifelse(is_recurring == 1, recurrence_rule, "No")
+      ) %>%
+      select(Title = title, `First date`, Occurrences = occurrences, Status = status, `Recurring?`)
+    
+    datatable(events, rownames = FALSE, selection = "multiple",
+              style = "bootstrap5", options = list(pageLength = 10))
+  })
+  
+  observeEvent(input$delete_btn, {
+    req(input$all_events_table_rows_selected)
+    selected_keys <- all_grouped()$group_key[input$all_events_table_rows_selected]
+    everything <- all_events() %>% add_group_key()
+    ids_to_delete <- everything$id[everything$group_key %in% selected_keys]
+    
+    con <- get_con()
+    for (event_id in ids_to_delete) {
+      dbExecute(con, "DELETE FROM events WHERE id = ?", params = list(event_id))
+    }
+    dbDisconnect(con)
+    refresh_trigger(refresh_trigger() + 1)
   })
 
   observeEvent(input$approve_btn, {
