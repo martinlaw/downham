@@ -418,11 +418,7 @@ ui <- fluidPage(
       
       h4("Further ahead"),
       DTOutput("public_events_table"),
-      
-      hr(),
-      h4("Calendar view"),
 
-      DTOutput("public_events_table"),
       hr(),
       h4("Calendar view"),
       p("Click an event in the calendar for full details."),
@@ -716,13 +712,41 @@ server <- function(input, output, session) {
 
   # ---- Handle new submissions ----
   observeEvent(input$submit_btn, {
-    req(input$sub_title, input$sub_date)
+    # Validate explicitly instead of a bare req(). req() aborts completely
+    # silently - no error, no confirmation, nothing changes on screen. On a
+    # phone, if a field's value hasn't finished syncing from the on-screen
+    # keyboard by the time the tap on "Submit event" registers, that silent
+    # abort looks exactly like "nothing happened when I pressed submit".
+    # Showing an explicit message means a failed attempt is always visible,
+    # even if the underlying cause is just unlucky timing.
+    missing_bits <- c()
+    if (is.null(input$sub_title) || !nzchar(trimws(input$sub_title))) {
+      missing_bits <- c(missing_bits, "a title")
+    }
+    if (is.null(input$sub_date) || length(input$sub_date) == 0 || is.na(input$sub_date)) {
+      missing_bits <- c(missing_bits, "a date")
+    }
+
+    if (length(missing_bits) > 0) {
+      showNotification(
+        paste0("Please add ", paste(missing_bits, collapse = " and "), " before submitting, then try again."),
+        type = "error", duration = 8
+      )
+      return()
+    }
 
     start_time_val <- if (nzchar(input$sub_start_time)) input$sub_start_time else NA
     end_time_val <- if (nzchar(input$sub_end_time)) input$sub_end_time else NA
     url_val <- if (nzchar(input$sub_url)) input$sub_url else NA
 
     con <- get_con()
+    # Unlike elsewhere in this app, this handler used to close the
+    # connection with a plain dbDisconnect(con) at the end - which never
+    # ran if anything above it threw an error (e.g. an edge case in the
+    # recurrence-date maths). A leaked connection like that can cause
+    # *later, unrelated* submissions to fail against the SQLite file too.
+    # on.exit guarantees the connection closes whether this succeeds or not.
+    on.exit(dbDisconnect(con), add = TRUE)
 
     insert_one <- function(event_date, series_id, recurrence_rule) {
       dbExecute(con, "
@@ -744,31 +768,43 @@ server <- function(input, output, session) {
       ))
     }
 
-    if (input$sub_recurring && input$sub_recurrence_type != "custom") {
-      # A structured pattern (weekly/fortnightly/monthly): generate every
-      # occurrence now and insert them as one series, capped at 12 rows.
-      occurrence_dates <- generate_occurrence_dates(
-        input$sub_recurrence_type, input$sub_date, input$sub_recurrence_count
-      )
-      series_id <- generate_series_id()
-      rule_label <- describe_recurrence(input$sub_recurrence_type, input$sub_date, NA)
-      for (d in occurrence_dates) {
-        insert_one(as.Date(d, origin = "1970-01-01"), series_id, rule_label)
-      }
-      notify_new_submission(input$sub_title, input$sub_date, length(occurrence_dates))
-    } else {
-      # A one-off event, or a recurring pattern too irregular to describe
-      # with the dropdown - stored as a single row, shown once.
-      rule_label <- if (input$sub_recurring) {
-        describe_recurrence("custom", input$sub_date, input$sub_recurrence_text)
+    submission_ok <- tryCatch({
+      if (input$sub_recurring && input$sub_recurrence_type != "custom") {
+        # A structured pattern (weekly/fortnightly/monthly): generate every
+        # occurrence now and insert them as one series, capped at 12 rows.
+        occurrence_dates <- generate_occurrence_dates(
+          input$sub_recurrence_type, input$sub_date, input$sub_recurrence_count
+        )
+        series_id <- generate_series_id()
+        rule_label <- describe_recurrence(input$sub_recurrence_type, input$sub_date, NA)
+        for (d in occurrence_dates) {
+          insert_one(as.Date(d, origin = "1970-01-01"), series_id, rule_label)
+        }
+        notify_new_submission(input$sub_title, input$sub_date, length(occurrence_dates))
       } else {
-        NA
+        # A one-off event, or a recurring pattern too irregular to describe
+        # with the dropdown - stored as a single row, shown once.
+        rule_label <- if (input$sub_recurring) {
+          describe_recurrence("custom", input$sub_date, input$sub_recurrence_text)
+        } else {
+          NA
+        }
+        insert_one(input$sub_date, NA, rule_label)
+        notify_new_submission(input$sub_title, input$sub_date)
       }
-      insert_one(input$sub_date, NA, rule_label)
-      notify_new_submission(input$sub_title, input$sub_date)
-    }
+      TRUE
+    }, error = function(e) {
+      message("Could not save submission: ", conditionMessage(e))
+      FALSE
+    })
 
-    dbDisconnect(con)
+    if (!isTRUE(submission_ok)) {
+      showNotification(
+        "Sorry, something went wrong saving that event - please try again.",
+        type = "error", duration = 8
+      )
+      return()
+    }
 
     # Clear the form so it's ready for the next submission
     updateTextInput(session, "sub_title", value = "")
@@ -783,6 +819,13 @@ server <- function(input, output, session) {
     updateNumericInput(session, "sub_recurrence_count", value = 4)
     updateTextInput(session, "sub_recurrence_text", value = "")
 
+    # A toast notification, not just the inline text below the button, so
+    # confirmation is visible even if that part of the page is scrolled
+    # out of view or hidden behind the on-screen keyboard on a phone.
+    showNotification(
+      "Thanks! Your event has been submitted and will appear once approved.",
+      type = "message", duration = 6
+    )
     output$submit_confirmation <- renderText({
       "Thanks! Your event has been submitted and will appear once approved."
     })
@@ -868,8 +911,7 @@ server <- function(input, output, session) {
     datatable(events, rownames = FALSE, selection = "multiple",
               style = "bootstrap5",
               escape = -which(names(events) == "Link"),
-              options = list(pageLength = 10),
-              scrollX = TRUE)
+              options = list(pageLength = 10, scrollX = TRUE))
   })
   
   all_grouped <- reactive({
