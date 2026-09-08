@@ -6,16 +6,8 @@
 # ---- Packages ----
 # If any of these aren't installed yet, run (once):
 # install.packages(c("shiny", "DT", "DBI", "RSQLite", "dplyr", "lubridate", "bslib", "blastula"))
-#install.packages("librarian")
-#librarian::shelf(c("shiny", "DT", "DBI", "RSQLite", "dplyr", "lubridate", "bslib", "blastula"))
-library(shiny)
-library(DT)
-library(DBI)
-library(RSQLite)
-library(dplyr)
-library(lubridate)
-library(bslib)
-library(blastula)
+install.packages("librarian")
+librarian::shelf(c("shiny", "DT", "DBI", "RSQLite", "dplyr", "lubridate", "bslib", "blastula"))
 
 # ---- Database setup ----
 # Using SQLite so submissions persist between app restarts.
@@ -107,7 +99,7 @@ COLOR_ACCENT_TINT <- "#f5ead2"  # pale version of the accent, for row/date highl
 # sending account (with two-factor authentication turned on first).
 NOTIFY_EMAIL <- Sys.getenv("NOTIFY_EMAIL")
 SMTP_USER <- Sys.getenv("SMTP_USER")
-SMTP_PROVIDER <- Sys.getenv("SMTP_PROVIDER", "")
+SMTP_PROVIDER <- Sys.getenv("SMTP_PROVIDER", "gmail")
 SMTP_HOST <- Sys.getenv("SMTP_HOST")
 SMTP_PORT <- Sys.getenv("SMTP_PORT")
 
@@ -119,15 +111,12 @@ SMTP_PORT <- Sys.getenv("SMTP_PORT")
 notify_new_submission <- function(title, first_date, occurrences = 1) {
   if (!nzchar(NOTIFY_EMAIL) || !nzchar(SMTP_USER)) return(invisible(NULL))
 
-  
   tryCatch({
-    creds <- if (nzchar(SMTP_HOST)) {
-      creds_envvar(user = SMTP_USER, pass_envvar = "SMTP_PASSWORD",
-                   host = SMTP_HOST, port = as.integer(SMTP_PORT), use_ssl = TRUE)
-    } else if (nzchar(SMTP_PROVIDER)) {
+    creds <- if (nzchar(SMTP_PROVIDER)) {
       creds_envvar(user = SMTP_USER, pass_envvar = "SMTP_PASSWORD", provider = SMTP_PROVIDER)
     } else {
-      stop("Email is configured but neither SMTP_HOST nor SMTP_PROVIDER is set")
+      creds_envvar(user = SMTP_USER, pass_envvar = "SMTP_PASSWORD",
+                   host = SMTP_HOST, port = as.integer(SMTP_PORT), use_ssl = TRUE)
     }
 
     when_text <- if (occurrences > 1) {
@@ -399,19 +388,6 @@ ui <- fluidPage(
       #whats_on_calendar .fc-daygrid-day-frame {
         min-height: 90px;
       }
-      /* iOS Safari is quick to treat a tap on plain text as the start of
-         a text selection (the magnifying-glass / 'Copy' popup), which
-         swallows the tap before it ever reaches FullCalendar's click
-         handler - Android's tap-vs-select handling is more forgiving,
-         which is why this only shows up on iPhone. Disabling selection
-         and the long-press callout on events fixes it. */
-      #whats_on_calendar .fc-event {
-        cursor: pointer;
-        touch-action: manipulation;
-        -webkit-touch-callout: none;
-        -webkit-user-select: none;
-        user-select: none;
-      }
     ")))
   ),
   titlePanel(SITE_TITLE),
@@ -423,15 +399,9 @@ ui <- fluidPage(
     tabPanel(
       "What's On",
       br(),
-      p(paste0("A guide to upcoming events in Downham Market. Check out upcoming events, and add your own by clicking the 'Submit' tab. Enjoy!")),
+      p(paste0("A guide to upcoming events in Downham Market. See what events are on, and add your own. No adverts, no spam.")),
       checkboxInput("show_recurring", "Include recurring events/classes (highlighted).", value = FALSE),
-      
-      h4("Coming up in the next 7 days"),
-      uiOutput("this_week_strip"),
-      
-      h4("Further ahead"),
       DTOutput("public_events_table"),
-
       hr(),
       h4("Calendar view"),
       p("Click an event in the calendar for full details."),
@@ -445,9 +415,9 @@ ui <- fluidPage(
             displayEventTime: false,
             dayMaxEventRows: false,
             headerToolbar: {
-              left: 'prev,next',
+              left: 'prev,next today',
               center: 'title',
-              right: 'dayGridMonth,timeGridWeek,timeGridDay'
+              right: ''
             },
             events: [],
             eventClick: function(info) {
@@ -469,10 +439,6 @@ ui <- fluidPage(
           Shiny.addCustomMessageHandler('updateCalendarEvents', function(events) {
             calendar.removeAllEvents();
             events.forEach(function(e) { calendar.addEvent(e); });
-            calendar.updateSize();   // <-- recalculate after the layout has settled
-          });
-          window.addEventListener('load', function() {
-          calendar.updateSize();  // <-- catch any layout shift from late-loading fonts
           });
         });
       "))
@@ -551,64 +517,10 @@ server <- function(input, output, session) {
     dbReadTable(con, "events")
   })
 
-  # The single source of truth for "what's coming up" - approved, upcoming,
-  # with the recurring-events checkbox applied, sorted chronologically.
-  # Both the 7-day strip and the "Further ahead" table read from this, so
-  # there's only one place that defines what counts as "upcoming".
-  upcoming_events <- reactive({
-    events <- all_events() %>%
-      filter(status == "approved", as.Date(event_date) >= Sys.Date())
-    
-    if (!isTRUE(input$show_recurring)) {
-      events <- events %>% filter(is_recurring == 0)
-    }
-    
-    events %>%
-      mutate(event_date = as.Date(event_date)) %>%
-      arrange(event_date, desc(is.na(start_time)), start_time)
-  })
-  
-  this_week_events <- reactive({
-    upcoming_events() %>% filter(event_date <= Sys.Date() + 7)
-  })
-  
-  further_ahead_events <- reactive({
-    upcoming_events() %>% filter(event_date > Sys.Date() + 7)
-  })
-  
-  output$this_week_strip <- renderUI({
-    ev <- this_week_events()
-    
-    if (nrow(ev) == 0) {
-      return(tags$p(style = "color: #666; font-style: italic;",
-                    "Nothing in the next seven days - see what's further ahead below."))
-    }
-    
-    items <- lapply(seq_len(nrow(ev)), function(i) {
-      row <- ev[i, ]
-      accent <- if (isTRUE(row$is_recurring == 1)) COLOR_ACCENT else COLOR_PRIMARY
-      when_label <- format_time_range_vec(row$start_time, row$end_time)
-      
-      div(style = paste0("flex: 0 0 190px; border-left: 4px solid ", accent, "; padding: 8px 14px;"),
-          div(style = "display: flex; align-items: baseline; gap: 6px;",
-              tags$span(style = "font-family: 'Fraunces', serif; font-size: 24px; font-weight: 600;",
-                        format(row$event_date, "%d")),
-              tags$span(style = "font-size: 13px; color: #666;",
-                        format(row$event_date, "%a %b"))
-          ),
-          tags$strong(row$title),
-          if (nzchar(when_label)) tags$div(style = "font-size: 13px; color: #555;", when_label),
-          if (!is.na(row$location) && nzchar(row$location))
-            tags$div(style = "font-size: 13px; color: #555;", row$location)
-      )
-    })
-    
-    div(style = "display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px;", items)
-  })
-  
   # ---- Public "What's On" table ----
   output$public_events_table <- renderDT({
-    events <- further_ahead_events()   # <-- was: all_events() %>% filter(...)
+    events <- all_events() %>%
+      filter(status == "approved")
 
     if (!isTRUE(input$show_recurring)) {
       events <- events %>% filter(is_recurring == 0)
@@ -632,7 +544,6 @@ server <- function(input, output, session) {
       escape = -which(names(events) == "Link"),
       options = list(
         pageLength = 15,
-        language = list(zeroRecords = "Nothing further ahead yet - check back as more events get added!"),
         # The rows are already sorted chronologically above; sorting by
         # the displayed "When" text wouldn't sort correctly (e.g. "1st"
         # before "10th"), so no column-based sort is applied here.
@@ -730,41 +641,13 @@ server <- function(input, output, session) {
 
   # ---- Handle new submissions ----
   observeEvent(input$submit_btn, {
-    # Validate explicitly instead of a bare req(). req() aborts completely
-    # silently - no error, no confirmation, nothing changes on screen. On a
-    # phone, if a field's value hasn't finished syncing from the on-screen
-    # keyboard by the time the tap on "Submit event" registers, that silent
-    # abort looks exactly like "nothing happened when I pressed submit".
-    # Showing an explicit message means a failed attempt is always visible,
-    # even if the underlying cause is just unlucky timing.
-    missing_bits <- c()
-    if (is.null(input$sub_title) || !nzchar(trimws(input$sub_title))) {
-      missing_bits <- c(missing_bits, "a title")
-    }
-    if (is.null(input$sub_date) || length(input$sub_date) == 0 || is.na(input$sub_date)) {
-      missing_bits <- c(missing_bits, "a date")
-    }
-
-    if (length(missing_bits) > 0) {
-      showNotification(
-        paste0("Please add ", paste(missing_bits, collapse = " and "), " before submitting, then try again."),
-        type = "error", duration = 8
-      )
-      return()
-    }
+    req(input$sub_title, input$sub_date)
 
     start_time_val <- if (nzchar(input$sub_start_time)) input$sub_start_time else NA
     end_time_val <- if (nzchar(input$sub_end_time)) input$sub_end_time else NA
     url_val <- if (nzchar(input$sub_url)) input$sub_url else NA
 
     con <- get_con()
-    # Unlike elsewhere in this app, this handler used to close the
-    # connection with a plain dbDisconnect(con) at the end - which never
-    # ran if anything above it threw an error (e.g. an edge case in the
-    # recurrence-date maths). A leaked connection like that can cause
-    # *later, unrelated* submissions to fail against the SQLite file too.
-    # on.exit guarantees the connection closes whether this succeeds or not.
-    on.exit(dbDisconnect(con), add = TRUE)
 
     insert_one <- function(event_date, series_id, recurrence_rule) {
       dbExecute(con, "
@@ -786,43 +669,31 @@ server <- function(input, output, session) {
       ))
     }
 
-    submission_ok <- tryCatch({
-      if (input$sub_recurring && input$sub_recurrence_type != "custom") {
-        # A structured pattern (weekly/fortnightly/monthly): generate every
-        # occurrence now and insert them as one series, capped at 12 rows.
-        occurrence_dates <- generate_occurrence_dates(
-          input$sub_recurrence_type, input$sub_date, input$sub_recurrence_count
-        )
-        series_id <- generate_series_id()
-        rule_label <- describe_recurrence(input$sub_recurrence_type, input$sub_date, NA)
-        for (d in occurrence_dates) {
-          insert_one(as.Date(d, origin = "1970-01-01"), series_id, rule_label)
-        }
-        notify_new_submission(input$sub_title, input$sub_date, length(occurrence_dates))
-      } else {
-        # A one-off event, or a recurring pattern too irregular to describe
-        # with the dropdown - stored as a single row, shown once.
-        rule_label <- if (input$sub_recurring) {
-          describe_recurrence("custom", input$sub_date, input$sub_recurrence_text)
-        } else {
-          NA
-        }
-        insert_one(input$sub_date, NA, rule_label)
-        notify_new_submission(input$sub_title, input$sub_date)
-      }
-      TRUE
-    }, error = function(e) {
-      message("Could not save submission: ", conditionMessage(e))
-      FALSE
-    })
-
-    if (!isTRUE(submission_ok)) {
-      showNotification(
-        "Sorry, something went wrong saving that event - please try again.",
-        type = "error", duration = 8
+    if (input$sub_recurring && input$sub_recurrence_type != "custom") {
+      # A structured pattern (weekly/fortnightly/monthly): generate every
+      # occurrence now and insert them as one series, capped at 12 rows.
+      occurrence_dates <- generate_occurrence_dates(
+        input$sub_recurrence_type, input$sub_date, input$sub_recurrence_count
       )
-      return()
+      series_id <- generate_series_id()
+      rule_label <- describe_recurrence(input$sub_recurrence_type, input$sub_date, NA)
+      for (d in occurrence_dates) {
+        insert_one(as.Date(d, origin = "1970-01-01"), series_id, rule_label)
+      }
+      notify_new_submission(input$sub_title, input$sub_date, length(occurrence_dates))
+    } else {
+      # A one-off event, or a recurring pattern too irregular to describe
+      # with the dropdown - stored as a single row, shown once.
+      rule_label <- if (input$sub_recurring) {
+        describe_recurrence("custom", input$sub_date, input$sub_recurrence_text)
+      } else {
+        NA
+      }
+      insert_one(input$sub_date, NA, rule_label)
+      notify_new_submission(input$sub_title, input$sub_date)
     }
+
+    dbDisconnect(con)
 
     # Clear the form so it's ready for the next submission
     updateTextInput(session, "sub_title", value = "")
@@ -837,13 +708,6 @@ server <- function(input, output, session) {
     updateNumericInput(session, "sub_recurrence_count", value = 4)
     updateTextInput(session, "sub_recurrence_text", value = "")
 
-    # A toast notification, not just the inline text below the button, so
-    # confirmation is visible even if that part of the page is scrolled
-    # out of view or hidden behind the on-screen keyboard on a phone.
-    showNotification(
-      "Thanks! Your event has been submitted and will appear once approved.",
-      type = "message", duration = 6
-    )
     output$submit_confirmation <- renderText({
       "Thanks! Your event has been submitted and will appear once approved."
     })
@@ -862,23 +726,11 @@ server <- function(input, output, session) {
       )
     } else {
       tagList(
-        tabsetPanel(
-          tabPanel(
-            "Pending",
-            br(),
-            p("Select the rows you want to act on, then click a button below. A recurring event's occurrences are grouped into one row, so approving or rejecting it applies to the whole series."),
-            DTOutput("pending_events_table"),
-            actionButton("approve_btn", "Approve selected", class = "btn-success"),
-            actionButton("reject_btn", "Reject selected", class = "btn-danger")
-          ),
-          tabPanel(
-            "All events",
-            br(),
-            p("Every event regardless of status - use this to remove test events or ones with mistakes. Deleting a recurring event removes the whole series."),
-            DTOutput("all_events_table"),
-            actionButton("delete_btn", "Delete selected", class = "btn-danger")
-          )
-        )
+        h4("Pending events"),
+        p("Select the rows you want to act on, then click a button below. A recurring event's occurrences are grouped into one row, so approving or rejecting it applies to the whole series."),
+        DTOutput("pending_events_table"),
+        actionButton("approve_btn", "Approve selected", class = "btn-success"),
+        actionButton("reject_btn", "Reject selected", class = "btn-danger")
       )
     }
   })
@@ -929,49 +781,7 @@ server <- function(input, output, session) {
     datatable(events, rownames = FALSE, selection = "multiple",
               style = "bootstrap5",
               escape = -which(names(events) == "Link"),
-              options = list(pageLength = 10, scrollX = TRUE))
-  })
-  
-  all_grouped <- reactive({
-    all_events() %>%
-      add_group_key() %>%
-      group_by(group_key) %>%
-      summarise(
-        title = first(title),
-        first_date = min(as.Date(event_date)),
-        occurrences = n(),
-        status = first(status),
-        is_recurring = first(is_recurring),
-        recurrence_rule = first(recurrence_rule),
-        .groups = "drop"
-      ) %>%
-      arrange(desc(first_date))
-  })
-  
-  output$all_events_table <- renderDT({
-    events <- all_grouped() %>%
-      mutate(
-        `First date` = format(first_date, "%d %b %Y"),
-        `Recurring?` = ifelse(is_recurring == 1, recurrence_rule, "No")
-      ) %>%
-      select(Title = title, `First date`, Occurrences = occurrences, Status = status, `Recurring?`)
-    
-    datatable(events, rownames = FALSE, selection = "multiple",
-              style = "bootstrap5", options = list(pageLength = 10))
-  })
-  
-  observeEvent(input$delete_btn, {
-    req(input$all_events_table_rows_selected)
-    selected_keys <- all_grouped()$group_key[input$all_events_table_rows_selected]
-    everything <- all_events() %>% add_group_key()
-    ids_to_delete <- everything$id[everything$group_key %in% selected_keys]
-    
-    con <- get_con()
-    for (event_id in ids_to_delete) {
-      dbExecute(con, "DELETE FROM events WHERE id = ?", params = list(event_id))
-    }
-    dbDisconnect(con)
-    refresh_trigger(refresh_trigger() + 1)
+              options = list(pageLength = 10))
   })
 
   observeEvent(input$approve_btn, {
