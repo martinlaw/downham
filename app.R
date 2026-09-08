@@ -399,6 +399,19 @@ ui <- fluidPage(
       #whats_on_calendar .fc-daygrid-day-frame {
         min-height: 90px;
       }
+      /* iOS Safari is quick to treat a tap on plain text as the start of
+         a text selection (the magnifying-glass / 'Copy' popup), which
+         swallows the tap before it ever reaches FullCalendar's click
+         handler - Android's tap-vs-select handling is more forgiving,
+         which is why this only shows up on iPhone. Disabling selection
+         and the long-press callout on events fixes it. */
+      #whats_on_calendar .fc-event {
+        cursor: pointer;
+        touch-action: manipulation;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+      }
     ")))
   ),
   titlePanel(SITE_TITLE),
@@ -431,6 +444,11 @@ ui <- fluidPage(
             height: 650,
             displayEventTime: false,
             dayMaxEventRows: false,
+            headerToolbar: {
+              left: 'prev,next',
+              center: 'title',
+              right: 'dayGridMonth,timeGridWeek,timeGridDay'
+            },
             events: [],
             eventClick: function(info) {
               info.jsEvent.preventDefault();
