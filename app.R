@@ -360,6 +360,92 @@ make_link_cell <- function(url) {
          "")
 }
 
+# ---- "Add to calendar" (.ics) helpers ----
+
+# Escapes text per RFC5545 (iCalendar) TEXT value rules: a literal
+# backslash, comma or semicolon must be backslash-escaped, and newlines
+# become the two-character sequence "\n" rather than an actual line break
+# (a real line break would be read as the start of a new property).
+ics_escape <- function(x) {
+  x <- ifelse(is.na(x), "", x)
+  x <- gsub("\\", "\\\\", x, fixed = TRUE)
+  x <- gsub(";", "\\;", x, fixed = TRUE)
+  x <- gsub(",", "\\,", x, fixed = TRUE)
+  x <- gsub("\r\n", "\\n", x, fixed = TRUE)
+  x <- gsub("\n", "\\n", x, fixed = TRUE)
+  x <- gsub("\r", "\\n", x, fixed = TRUE)
+  x
+}
+
+# RFC5545 recommends folding (wrapping) content lines longer than 75
+# octets, with each continuation line starting with a single space. Most
+# calendar apps cope fine with long lines anyway, but a long Description
+# is the one field here likely to exceed that, so it's folded to be safe.
+fold_ics_line <- function(line) {
+  max_len <- 75
+  if (nchar(line, type = "bytes") <= max_len) return(line)
+  pieces <- c()
+  remaining <- line
+  first <- TRUE
+  while (nchar(remaining, type = "bytes") > 0) {
+    take <- if (first) max_len else max_len - 1
+    piece <- substr(remaining, 1, take)
+    pieces <- c(pieces, if (first) piece else paste0(" ", piece))
+    remaining <- substr(remaining, take + 1, nchar(remaining))
+    first <- FALSE
+  }
+  paste(pieces, collapse = "\r\n")
+}
+
+# Builds a single-event .ics (iCalendar) file from one row of the events
+# table, for the "Add to calendar" button on the event details modal.
+# Uses "floating" local time (no timezone/UTC suffix on timed events) -
+# the simplest option, and a reasonable one for a single-timezone local
+# community site.
+build_ics_for_event <- function(row) {
+  now_stamp <- format(as.POSIXct(Sys.time(), tz = "UTC"), "%Y%m%dT%H%M%SZ")
+  event_date <- as.Date(row$event_date)
+  has_start_time <- !is.na(row$start_time) && nzchar(row$start_time)
+  has_end_time <- !is.na(row$end_time) && nzchar(row$end_time)
+
+  if (has_start_time) {
+    dtstart <- paste0("DTSTART:", format(event_date, "%Y%m%d"), "T", gsub(":", "", row$start_time), "00")
+    dtend <- if (has_end_time) {
+      paste0("DTEND:", format(event_date, "%Y%m%d"), "T", gsub(":", "", row$end_time), "00")
+    } else {
+      # No end time given: default to a 1-hour slot so calendar apps
+      # don't show a zero-length event.
+      plus_hour <- as.POSIXct(paste("1970-01-01", row$start_time), format = "%Y-%m-%d %H:%M", tz = "UTC") + 3600
+      paste0("DTEND:", format(event_date, "%Y%m%d"), "T", format(plus_hour, "%H%M"), "00")
+    }
+  } else {
+    # All-day event: DTEND is exclusive in the iCalendar spec, so a
+    # single all-day event needs its DTEND set to the following day.
+    dtstart <- paste0("DTSTART;VALUE=DATE:", format(event_date, "%Y%m%d"))
+    dtend <- paste0("DTEND;VALUE=DATE:", format(event_date + 1, "%Y%m%d"))
+  }
+
+  lines <- list(
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//What's Going Downham//Events//EN",
+    "CALSCALE:GREGORIAN",
+    "BEGIN:VEVENT",
+    paste0("UID:event-", row$id, "@whats-going-downham"),
+    paste0("DTSTAMP:", now_stamp),
+    dtstart,
+    dtend,
+    paste0("SUMMARY:", ics_escape(row$title)),
+    if (!is.na(row$location) && nzchar(row$location)) paste0("LOCATION:", ics_escape(row$location)),
+    if (!is.na(row$description) && nzchar(row$description)) paste0("DESCRIPTION:", ics_escape(row$description)),
+    if (!is.na(row$url) && nzchar(row$url)) paste0("URL:", ics_escape(row$url)),
+    "END:VEVENT",
+    "END:VCALENDAR"
+  )
+  lines <- lines[!vapply(lines, is.null, logical(1))]
+  paste(vapply(unlist(lines), fold_ics_line, character(1)), collapse = "\r\n")
+}
+
 # ============================================
 # UI
 # ============================================
@@ -453,6 +539,7 @@ ui <- fluidPage(
             eventClick: function(info) {
               info.jsEvent.preventDefault();
               Shiny.setInputValue('calendar_event_click', {
+                id: info.event.extendedProps.event_id,
                 title: info.event.title,
                 date: info.event.extendedProps.date_label,
                 location: info.event.extendedProps.location,
@@ -614,6 +701,25 @@ server <- function(input, output, session) {
       events <- events %>% filter(is_recurring == 0)
     }
 
+    # DataTables' "zeroRecords" language option only fires when a search
+    # or filter narrows an otherwise-populated table down to nothing - it
+    # is never shown for a table that starts genuinely empty, which is
+    # the case here (nothing further ahead has been submitted/approved
+    # yet). Relying on DataTables' own empty-table handling for that case
+    # was what produced the "[object Object]" message, so instead we
+    # short-circuit to a tiny, deliberately plain one-cell table with the
+    # friendly text as its only row.
+    if (nrow(events) == 0) {
+      return(datatable(
+        data.frame(Message = "Nothing further ahead yet - check back as more events get added!"),
+        rownames = FALSE,
+        colnames = "",
+        selection = "none",
+        style = "bootstrap5",
+        options = list(dom = "t", ordering = FALSE, paging = FALSE, searching = FALSE, info = FALSE)
+      ))
+    }
+
     events <- events %>%
       mutate(
         event_date = as.Date(event_date),
@@ -632,7 +738,6 @@ server <- function(input, output, session) {
       escape = -which(names(events) == "Link"),
       options = list(
         pageLength = 15,
-        language = list(zeroRecords = "Nothing further ahead yet - check back as more events get added!"),
         # The rows are already sorted chronologically above; sorting by
         # the displayed "When" text wouldn't sort correctly (e.g. "1st"
         # before "10th"), so no column-based sort is applied here.
@@ -687,6 +792,7 @@ server <- function(input, output, session) {
         allDay = !has_start_time,
         color = if (isTRUE(row$is_recurring == 1)) COLOR_ACCENT else COLOR_PRIMARY,
         extendedProps = list(
+          event_id = row$id,
           location = row$location,
           description = row$description,
           recurrence_rule = row$recurrence_rule,
@@ -706,8 +812,14 @@ server <- function(input, output, session) {
   })
 
   # ---- Show event details when a calendar event is clicked ----
+  # Remembers which event the modal is currently showing, so the
+  # "Add to calendar" download handler below knows which row to build
+  # the .ics file from.
+  selected_calendar_event_id <- reactiveVal(NULL)
+
   observeEvent(input$calendar_event_click, {
     info <- input$calendar_event_click
+    selected_calendar_event_id(info$id)
     time_text <- info$start_time_label
     if (!is.null(info$end_time_label) && nzchar(info$end_time_label)) {
       time_text <- paste0(time_text, " \u2013 ", info$end_time_label)
@@ -724,9 +836,31 @@ server <- function(input, output, session) {
         tags$p(tags$a(href = info$url, target = "_blank", "More info"))
       },
       easyClose = TRUE,
-      footer = modalButton("Close")
+      footer = tagList(
+        downloadButton("download_ics", "Add to calendar", class = "btn-primary"),
+        modalButton("Close")
+      )
     ))
   })
+
+  # Builds the .ics file for whichever event the modal is currently
+  # showing. Looks the row back up by id rather than trusting anything
+  # from the click payload itself, so the file always reflects the real
+  # stored data (including the raw ISO date/time, not the display labels).
+  output$download_ics <- downloadHandler(
+    filename = function() {
+      ev_id <- selected_calendar_event_id()
+      paste0("event-", if (!is.null(ev_id)) ev_id else "download", ".ics")
+    },
+    content = function(file) {
+      ev_id <- selected_calendar_event_id()
+      req(ev_id)
+      row <- all_events() %>% filter(id == as.integer(ev_id))
+      req(nrow(row) == 1)
+      writeLines(build_ics_for_event(row[1, ]), file, useBytes = TRUE)
+    },
+    contentType = "text/calendar"
+  )
 
   # ---- Handle new submissions ----
   observeEvent(input$submit_btn, {
@@ -877,6 +1011,12 @@ server <- function(input, output, session) {
             p("Every event regardless of status - use this to remove test events or ones with mistakes. Deleting a recurring event removes the whole series."),
             DTOutput("all_events_table"),
             actionButton("delete_btn", "Delete selected", class = "btn-danger")
+          ),
+          tabPanel(
+            "Backup",
+            br(),
+            p("Downloads a complete, self-contained copy of the events database as it stands right now - every event regardless of status, ready to restore by dropping it back in as events.db (or the file DB_PATH points at) if anything ever goes wrong."),
+            downloadButton("download_backup", "Download database backup")
           )
         )
       )
@@ -890,6 +1030,25 @@ server <- function(input, output, session) {
       showNotification("Incorrect password", type = "error")
     }
   })
+
+  # ---- Admin: on-demand database backup ----
+  # Uses SQLite's own "VACUUM INTO" rather than a plain file copy, since
+  # that produces a single, guaranteed-consistent snapshot even if a
+  # write happens to be in progress at the same moment - a raw file copy
+  # of a live SQLite database can occasionally capture it mid-write.
+  output$download_backup <- downloadHandler(
+    filename = function() {
+      paste0("events-backup-", format(Sys.time(), "%Y%m%d-%H%M%S"), ".sqlite")
+    },
+    content = function(file) {
+      # VACUUM INTO requires the destination not to already exist.
+      if (file.exists(file)) file.remove(file)
+      con <- get_con()
+      on.exit(dbDisconnect(con))
+      dbExecute(con, paste0("VACUUM INTO '", gsub("'", "''", file), "'"))
+    },
+    contentType = "application/x-sqlite3"
+  )
 
   # A recurring submission creates several rows sharing one series_id;
   # this groups them into a single row for review, so approving/rejecting
